@@ -123,7 +123,7 @@ creds = None
 if os.path.exists('token.json'):
     try:
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-        # Check if token has the required scopes
+        
         if not creds.valid:
             creds.refresh(Request())
     except Exception as e:
@@ -215,7 +215,7 @@ def book_appointment(appointment_details: str):
                 else:
                     return f"No slots available for {doctor_name} on {date}"
             
-            # Book the appointment
+            
             appt = Appointment(
                 doctor_id=doctor.id, 
                 patient_email=patient_email, 
@@ -508,8 +508,6 @@ class Prompt(BaseModel):
     session_id: str
     
 
-    
-
 @app.post("/login", response_model=Token)
 async def login(data: UserLogin ):
     
@@ -539,6 +537,7 @@ async def login(data: UserLogin ):
 @app.get("/users/me", response_model=CurrentUser)
 async def get_current_user_info(current_user: CurrentUser = Depends(get_current_user)):
     return current_user
+
 
 
 class AppointmentSlots(BaseModel):
@@ -589,7 +588,6 @@ async def process_prompt(prompt: Prompt, current_user: CurrentUser = Depends(get
         if not hasattr(process_prompt, 'conversation_buffers'):
             process_prompt.conversation_buffers = {}
 
-        
         session_key = f"{current_user.email}_{prompt.session_id}"
         if session_key not in process_prompt.conversation_buffers:
             process_prompt.conversation_buffers[session_key] = {
@@ -626,7 +624,7 @@ async def process_prompt(prompt: Prompt, current_user: CurrentUser = Depends(get
             
             if current_user.role == "doctor":
                 enhanced_text = f"""Previous conversation context:
-{conversation_context}
+             {conversation_context}
 
 Based on the conversation history above, please respond to the current user message.
 You are a doctor user with elevated privileges.
