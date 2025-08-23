@@ -8,7 +8,7 @@ import asyncio
 
 load_dotenv()
 
-# Define some tools for the agents
+
 def calculator_tool(expression: str) -> str:
     """Calculate mathematical expressions safely"""
     try:
@@ -39,20 +39,20 @@ tools = [
     )
 ]
 
-# Create LLM
+
 llm = ChatTogether(
     together_api_key=os.getenv("TOGETHER_API_KEY"),
     model="lgai/exaone-3-5-32b-instruct"
 )
 
-# Create prompt template
+
 prompt = ChatPromptTemplate.from_messages([
     ("system", "{system_prompt}"),
     ("user", "{input}"),
     MessagesPlaceholder(variable_name="agent_scratchpad"),
 ])
 
-# Create agents
+
 code_agent_prompt = "You are a helpful coding assistant. Use tools when needed to help with calculations or code formatting."
 code_agent = create_openai_functions_agent(llm, tools, prompt)
 code_executor = AgentExecutor(agent=code_agent, tools=tools, verbose=True)
