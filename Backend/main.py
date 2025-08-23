@@ -58,10 +58,7 @@ class CurrentUser(BaseModel):
     name: Optional[str] = None
     
 def verify_user(email: str, password: str, name: str = None, role: str = "patient"):
-    """
-    - If user exists → verify password
-    - If not exists → create new user with given role
-    """
+    
     with SessionLocal() as session:
         user = session.query(User).filter(User.email == email).first()
 
