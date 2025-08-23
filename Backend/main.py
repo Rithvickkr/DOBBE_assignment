@@ -63,13 +63,13 @@ def verify_user(email: str, password: str, name: str = None, role: str = "patien
         user = session.query(User).filter(User.email == email).first()
 
         if user:
-            # User exists → check password
+            
             if pwd_context.verify(password, user.password):
                 return user
             else:
                 return None
         else:
-            # Create new user if not exists
+           
             new_user = User(
                 name=name if name else email.split("@")[0],
                 email=email,
@@ -80,7 +80,7 @@ def verify_user(email: str, password: str, name: str = None, role: str = "patien
             session.commit()
             session.refresh(new_user)
 
-            # If doctor → also create Doctor entry
+            
             if role == "doctor":
                 doctor = Doctor(user_id=new_user.id, name=new_user.name, availability={})
                 session.add(doctor)
