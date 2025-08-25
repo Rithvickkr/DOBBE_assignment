@@ -9,13 +9,13 @@ const DoctorDashboard = ({ user, onLogout }) => {
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState([]);
   
-  // Slot management
+
   const [newSlot, setNewSlot] = useState({
     date: '',
     slots: ['']
   });
 
-  // Fix: Use useState to maintain consistent session ID across re-renders
+  
   const [sessionId] = useState(() => `doctor_${user.email}_${Date.now()}`);
 
   useEffect(() => {
@@ -102,7 +102,7 @@ const DoctorDashboard = ({ user, onLogout }) => {
       });
 
       setChatHistory(prev => [...prev, { type: 'assistant', message: response.data.response }]);
-      fetchPromptHistory(); // Refresh history
+      fetchPromptHistory(); 
     } catch (error) {
       setChatHistory(prev => [...prev, { 
         type: 'error', 

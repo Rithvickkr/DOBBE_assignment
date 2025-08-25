@@ -28,7 +28,7 @@ const Login = ({ onLogin }) => {
       const response = await axios.post('http://localhost:8000/login', formData);
       const { access_token } = response.data;
       
-      // Fetch user info with the token
+      
       const userResponse = await axios.get('http://localhost:8000/users/me', {
         headers: {
           'Authorization': `Bearer ${access_token}`

@@ -10,7 +10,7 @@ function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check if user is already logged in
+    
     const token = localStorage.getItem('token');
     if (token) {
       fetchUserInfo(token);
