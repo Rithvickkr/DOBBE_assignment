@@ -10,7 +10,7 @@ const PatientDashboard = ({ user, onLogout }) => {
   const [appointments, setAppointments] = useState([]);
   const [history, setHistory] = useState([]);
   
-  // Fix: Use useState to maintain consistent session ID across re-renders
+
   const [sessionId] = useState(() => `patient_${user.email}_${Date.now()}`);
 
   useEffect(() => {
@@ -50,7 +50,7 @@ const PatientDashboard = ({ user, onLogout }) => {
       });
 
       setChatHistory(prev => [...prev, { type: 'assistant', message: response.data.response }]);
-      fetchPromptHistory(); // Refresh history
+      fetchPromptHistory(); 
     } catch (error) {
       setChatHistory(prev => [...prev, { 
         type: 'error', 
