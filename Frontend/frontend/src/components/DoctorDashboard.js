@@ -9,15 +9,14 @@ const DoctorDashboard = ({ user, onLogout }) => {
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState([]);
   
-// Slot management
-const [newSlot, setNewSlot] = useState({
+  // Slot management
+  const [newSlot, setNewSlot] = useState({
     date: '',
     slots: ['']
-});
+  });
 
-
-
-  const sessionId = `doctor_${user.email}_${Date.now()}`;
+  // Fix: Use useState to maintain consistent session ID across re-renders
+  const [sessionId] = useState(() => `doctor_${user.email}_${Date.now()}`);
 
   useEffect(() => {
     fetchPromptHistory();

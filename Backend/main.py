@@ -7,6 +7,7 @@ from passlib.context import CryptContext
 from langchain_together import ChatTogether
 from langchain.agents import initialize_agent, AgentType
 from langchain.tools import tool
+from langchain.memory import ConversationBufferMemory
 from db import SessionLocal, Doctor, Appointment, User, PromptHistory
 import os
 from dotenv import load_dotenv
@@ -20,13 +21,14 @@ from slack_sdk import WebClient
 import logging
 from sqlalchemy.orm.attributes import flag_modified
 
+from email.mime.text import MIMEText
+import base64
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 app = FastAPI()
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -58,18 +60,14 @@ class CurrentUser(BaseModel):
     name: Optional[str] = None
     
 def verify_user(email: str, password: str, name: str = None, role: str = "patient"):
-    
     with SessionLocal() as session:
         user = session.query(User).filter(User.email == email).first()
-
         if user:
-            
             if pwd_context.verify(password, user.password):
                 return user
             else:
                 return None
         else:
-           
             new_user = User(
                 name=name if name else email.split("@")[0],
                 email=email,
@@ -79,16 +77,12 @@ def verify_user(email: str, password: str, name: str = None, role: str = "patien
             session.add(new_user)
             session.commit()
             session.refresh(new_user)
-
-            
             if role == "doctor":
                 doctor = Doctor(user_id=new_user.id, name=new_user.name, availability={})
                 session.add(doctor)
                 session.commit()
                 session.refresh(doctor)
-
             return new_user
-
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -111,7 +105,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 # AI LLM setup
 llm = ChatTogether(
     together_api_key=os.getenv("TOGETHER_API_KEY") or "missing-key",
-    model=os.getenv("TOGETHER_MODEL", "lgai/exaone-3-5-32b-instruct")
+    model=os.getenv("TOGETHER_MODEL")
+    # "lgai/exaone-3-5-32b-instruct"
 )
 
 # Google API setup
@@ -120,7 +115,6 @@ creds = None
 if os.path.exists('token.json'):
     try:
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-        
         if not creds.valid:
             creds.refresh(Request())
     except Exception as e:
@@ -140,7 +134,6 @@ if not creds or not creds.valid:
         print(f"Google OAuth setup failed: {e}")
         creds = None
 
-
 calendar_service = None
 gmail_service = None
 if creds and creds.valid:
@@ -149,6 +142,28 @@ if creds and creds.valid:
         gmail_service = googleapiclient.discovery.build('gmail', 'v1', credentials=creds)
     except Exception as e:
         print(f"Google API service initialization failed: {e}")
+
+# Function to send confirmation email using Gmail API
+def send_confirmation_email(patient_email: str, patient_name: str, doctor_name: str, date: str, time: str, reason: str):
+    """Send a confirmation email to the patient using Gmail API."""
+    try:
+        if not gmail_service:
+            return "Gmail service unavailable."
+        
+        message = MIMEText(
+            f"Dear {patient_name},\n\n"
+            f"Your appointment with {doctor_name} on {date} at {time} for {reason} has been confirmed.\n\n"
+            f"Thank you,\nMedical Assistant Team"
+        )
+        message['to'] = patient_email
+        message['from'] = 'me' 
+        message['subject'] = 'Appointment Confirmation'
+        
+        raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+        gmail_service.users().messages().send(userId='me', body={'raw': raw_message}).execute()
+        return "Confirmation email sent successfully."
+    except Exception as e:
+        return f"Failed to send confirmation email: {str(e)}"
 
 # MCP Tools
 @tool
@@ -163,7 +178,6 @@ def check_availability(doctor_name_and_date: str):
         parts = doctor_name_and_date.split(',')
         if len(parts) != 2:
             return "Please provide doctor name and date separated by comma, e.g., Dr. Ahuja, 2025-08-23"
-        
         
         doctor_name = parts[0].strip().strip("'\"").strip()
         date = parts[1].strip().strip("'\"").strip()
@@ -212,7 +226,6 @@ def book_appointment(appointment_details: str):
                 else:
                     return f"No slots available for {doctor_name} on {date}"
             
-            
             appt = Appointment(
                 doctor_id=doctor.id, 
                 patient_email=patient_email, 
@@ -223,23 +236,19 @@ def book_appointment(appointment_details: str):
             )
             session.add(appt)
 
-           
             if date in doctor.availability and time in doctor.availability[date]:
-                    doctor.availability[date].remove(time)
-                    flag_modified(doctor, 'availability')
-                    session.commit()
+                doctor.availability[date].remove(time)
+                flag_modified(doctor, 'availability')
+                session.commit()
             else:
-                
                 print(f"Time slot {time} not found for {date}")
 
             # Google Calendar
             try:
                 if calendar_service:
-                    # Parse time format like "3PM-4PM" or "9AM-10AM"
                     start_hour = time.split('-')[0]
                     end_hour = time.split('-')[1]
                     
-                    # Convert to 24-hour format
                     if 'PM' in start_hour and start_hour.replace('PM', '') != '12':
                         start_24 = str(int(start_hour.replace('PM', '')) + 12)
                     elif 'AM' in start_hour and start_hour.replace('AM', '') == '12':
@@ -267,13 +276,28 @@ def book_appointment(appointment_details: str):
                     calendar_link = created_event.get('htmlLink', 'N/A')
                     print(f"Calendar event created successfully: {calendar_link}")
                     
-                    return f"Appointment booked successfully for {patient_name} ({patient_email}) with {doctor_name} on {date} at {time} for {reason}. Calendar event created: {calendar_link}"
+                    # Send confirmation email to patient
+                    email_result = send_confirmation_email(patient_email, patient_name, doctor_name, date, time, reason)
+                    print(email_result)
+                    
+                    return (f"Appointment booked successfully for {patient_name} ({patient_email}) with {doctor_name} "
+                            f"on {date} at {time} for {reason}. Calendar event created: {calendar_link}. {email_result}")
                 else:
-                    return f"Appointment booked successfully for {patient_name} ({patient_email}) with {doctor_name} on {date} at {time} for {reason}. Note: Calendar service unavailable."
+                    # Send confirmation email even if calendar service is unavailable
+                    email_result = send_confirmation_email(patient_email, patient_name, doctor_name, date, time, reason)
+                    print(email_result)
+                    
+                    return (f"Appointment booked successfully for {patient_name} ({patient_email}) with {doctor_name} "
+                            f"on {date} at {time} for {reason}. Note: Calendar service unavailable. {email_result}")
                 
             except Exception as calendar_error:
                 print(f"Calendar booking failed: {calendar_error}")
-                return f"Appointment booked successfully for {patient_name} ({patient_email}) with {doctor_name} on {date} at {time} for {reason}. Note: Calendar event creation failed."
+                #  Send confirmation email even if calendar booking fails
+                email_result = send_confirmation_email(patient_email, patient_name, doctor_name, date, time, reason)
+                print(email_result)
+                
+                return (f"Appointment booked successfully for {patient_name} ({patient_email}) with {doctor_name} "
+                        f"on {date} at {time} for {reason}. Note: Calendar event creation failed. {email_result}")
             
     except Exception as e:
         return f"Booking failed: {str(e)}"
@@ -307,17 +331,14 @@ def query_stats(query_type_and_doctor: str):
         if len(parts) < 2:
             return "Please provide at least query type and doctor name separated by comma"
         
-        
         is_doctor_view = False
         if len(parts) == 2:
-            
             query_type = parts[0].strip().strip("'\"").strip()
             doctor_name = parts[1].strip().strip("'\"").strip()
             patient_email = None
             patient_name = None
             reason = None
         elif len(parts) == 3:
-            
             query_type = parts[0].strip().strip("'\"").strip()
             doctor_name = parts[1].strip().strip("'\"").strip()
             third_param = parts[2].strip().strip("'\"").strip()
@@ -329,7 +350,6 @@ def query_stats(query_type_and_doctor: str):
             patient_name = None
             reason = None
         elif len(parts) == 4:
-           
             query_type = parts[0].strip().strip("'\"").strip() 
             doctor_name = parts[1].strip().strip("'\"").strip()
             patient_name = parts[2].strip().strip("'\"").strip()
@@ -341,7 +361,6 @@ def query_stats(query_type_and_doctor: str):
         print(f"Query stats for '{doctor_name}' with query type '{query_type}' (Doctor view: {is_doctor_view})")
         
         with SessionLocal() as session:
-            
             doctor = session.query(Doctor).filter(Doctor.name == doctor_name).first()
             if not doctor:
                 return f"Doctor '{doctor_name}' not found."
@@ -350,11 +369,8 @@ def query_stats(query_type_and_doctor: str):
             yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
             tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
             
-            
             if len(parts) == 2 or len(parts) == 3:
-                
                 if query_type.startswith("appointments_"):
-                    
                     date_part = query_type.replace("appointments_", "")
                     if date_part in ["yesterday", "today", "tomorrow"]:
                         if date_part == "yesterday":
@@ -364,7 +380,6 @@ def query_stats(query_type_and_doctor: str):
                         elif date_part == "tomorrow":
                             target_date = tomorrow
                     else:
-                       
                         target_date = date_part
                 elif query_type == "appointments_yesterday":
                     target_date = yesterday
@@ -373,15 +388,12 @@ def query_stats(query_type_and_doctor: str):
                 elif query_type == "appointments_tomorrow":
                     target_date = tomorrow
                 else:
-                    
                     target_date = query_type
                 
-               
                 query = session.query(Appointment).filter(
                     Appointment.doctor_id == doctor.id,
                     Appointment.date == target_date
                 )
-                
                 
                 if patient_email:
                     query = query.filter(Appointment.patient_email == patient_email)
@@ -390,9 +402,7 @@ def query_stats(query_type_and_doctor: str):
                 
                 count = len(appointments)
                 
-               
                 if patient_email:
-                    
                     if count > 0:
                         details = f"{count} appointment(s) for {patient_email} with {doctor_name} on {target_date}:\n"
                         for appt in appointments:
@@ -401,7 +411,6 @@ def query_stats(query_type_and_doctor: str):
                     else:
                         return f"No appointments for {patient_email} with {doctor_name} on {target_date}."
                 elif is_doctor_view:
-                    
                     if count > 0:
                         details = f"{count} appointment(s) for {doctor_name} on {target_date}:\n"
                         for appt in appointments:
@@ -411,7 +420,6 @@ def query_stats(query_type_and_doctor: str):
                         return f"No appointments for {doctor_name} on {target_date}."
                 else:
                     available_slots = doctor.availability.get(target_date, [])
-                    
                     if available_slots:
                         return f"Available slots for {doctor_name} on {target_date}: {', '.join(available_slots)}"
                     else:
@@ -420,7 +428,6 @@ def query_stats(query_type_and_doctor: str):
                         else:
                             return f"No slots available for {doctor_name} on {target_date}."
             
-           
             elif len(parts) == 4:
                 target_date = query_type  
                 appointments = session.query(Appointment).filter(
@@ -431,7 +438,6 @@ def query_stats(query_type_and_doctor: str):
                 ).all()
                 
                 if appointments:
-                    
                     return f"Found appointment for {patient_name} with {doctor_name} on {target_date} for {reason}."
                 else:
                     return f"No appointment found for {patient_name} with {doctor_name} on {target_date} for {reason}."
@@ -439,12 +445,15 @@ def query_stats(query_type_and_doctor: str):
     except Exception as e:
         return f"Error querying stats: {str(e)}"
 
-# Agent setup
+#agent initialization   
+memory = ConversationBufferMemory(return_messages=True, memory_key="chat_history")
 tools = [check_availability, book_appointment, query_stats]
+
 agent = initialize_agent(
     tools=tools,
     llm=llm,
     agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+    memory=memory,
     verbose=True,
     handle_parsing_errors=True,
     max_iterations=5,
@@ -466,7 +475,8 @@ You have access to the following tools:
 
 3. query_stats: Get appointment statistics for a doctor
    - For available slots: 'YYYY-MM-DD, Doctor Name' (e.g., '2025-08-24, Dr. Ahuja')
-   - For relative dates: 'appointments_today, Doctor Name' or 'appointments_yesterday, Doctor Name' or 'appointments_tomorrow, Doctor Name'
+   - For relative dates: 'appointments_today, Doctor Name' or 'appointments_yesterday, Doctor Name' or 'appointments_tomorrow, AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+    Doctor Name'
    - For patient's own appointments: 'query_type, Doctor Name, Patient Email' (e.g., 'appointments_today, Dr. Ahuja, raju@example.com')
    - For doctors to see patient details: 'query_type, Doctor Name, DOCTOR_VIEW' (e.g., 'appointments_today, Dr. Ahuja, DOCTOR_VIEW')
    - IMPORTANT: Always use the exact doctor name mentioned in the user's current message
@@ -503,15 +513,12 @@ Thought:{agent_scratchpad}"""
 class Prompt(BaseModel):
     text: str
     session_id: str
-    
 
 @app.post("/login", response_model=Token)
-async def login(data: UserLogin ):
-    
+async def login(data: UserLogin):
     name = data.name
     if data.role == "doctor" and name and not name.strip().lower().startswith("dr."):
         name = f"Dr. {name.strip()}"
-    
     
     user = verify_user(
         email=data.email,
@@ -523,19 +530,15 @@ async def login(data: UserLogin ):
     if not user:
         raise HTTPException(status_code=401, detail="Incorrect email or password")
 
-    # generate JWT
     access_token = create_access_token(
         data={"sub": user.email, "role": user.role, "name": user.name}
     )
 
     return {"access_token": access_token, "token_type": "bearer"}
 
-
 @app.get("/users/me", response_model=CurrentUser)
 async def get_current_user_info(current_user: CurrentUser = Depends(get_current_user)):
     return current_user
-
-
 
 class AppointmentSlots(BaseModel):
     slots: dict  
@@ -547,22 +550,17 @@ async def add_appointment_slots(appointment_slots: AppointmentSlots, current_use
 
     try:
         with SessionLocal() as session:
-            
             doctor = session.query(Doctor).join(User).filter(User.email == current_user.email).first()
             if not doctor:
                 raise HTTPException(status_code=404, detail="Doctor record not found")
             
-            
             for date, slots in appointment_slots.slots.items():
                 if date in doctor.availability:
-                    
                     existing_slots = set(doctor.availability[date])
                     new_slots = set(slots)
                     doctor.availability[date] = list(existing_slots.union(new_slots))
                 else:
-                    
                     doctor.availability[date] = slots
-            
             
             flag_modified(doctor, 'availability')
             session.commit()
@@ -579,46 +577,58 @@ async def process_prompt(prompt: Prompt, current_user: CurrentUser = Depends(get
     logger.info(f"Processing prompt: {text}")
     logger.info(f"User role: {current_user.role}")
     
-    
     try:
-       
-        if not hasattr(process_prompt, 'conversation_buffers'):
-            process_prompt.conversation_buffers = {}
-
+        
         session_key = f"{current_user.email}_{prompt.session_id}"
-        if session_key not in process_prompt.conversation_buffers:
-            process_prompt.conversation_buffers[session_key] = {
-                'messages': [],
-                'created_at': datetime.now(),
-                'last_activity': datetime.now()
-            }
-
-        conversation_buffer = process_prompt.conversation_buffers[session_key]
-        conversation_buffer['last_activity'] = datetime.now()
-
+        if not hasattr(process_prompt, 'memory_buffers'):
+            process_prompt.memory_buffers = {}
+        
+        if session_key not in process_prompt.memory_buffers:
+            process_prompt.memory_buffers[session_key] = ConversationBufferMemory(return_messages=True, memory_key="chat_history")
+        
+        memory = process_prompt.memory_buffers[session_key]
+        
+        
+        conversation_history = memory.load_memory_variables({}).get("chat_history", [])
+        
         
         current_time = datetime.now()
-        sessions_to_remove = []
-        for key, session_data in process_prompt.conversation_buffers.items():
-            if (current_time - session_data['last_activity']).total_seconds() > 3600:  # 1 hour
-                sessions_to_remove.append(key)
-
-        for key in sessions_to_remove:
-            del process_prompt.conversation_buffers[key]
-
+        
+        
+        if not hasattr(process_prompt, 'session_timestamps'):
+            process_prompt.session_timestamps = {}
+        
        
+        process_prompt.session_timestamps[session_key] = current_time
+        
+       
+        sessions_to_remove = []
+        for key in list(process_prompt.memory_buffers.keys()):
+            last_accessed = process_prompt.session_timestamps.get(key, current_time)
+            if (current_time - last_accessed).total_seconds() > 3600:
+                sessions_to_remove.append(key)
+        
+        for key in sessions_to_remove:
+            if key in process_prompt.memory_buffers:
+                del process_prompt.memory_buffers[key]
+            if key in process_prompt.session_timestamps:
+                del process_prompt.session_timestamps[key]
+        
+        
         conversation_context = ""
-        messages = conversation_buffer['messages']
-        if messages:
+        if conversation_history:
             conversation_context = "\nConversation History:\n"
             
-            recent_history = messages[-10:] if len(messages) > 10 else messages
-            for exchange in recent_history:
-                conversation_context += f"User: {exchange['user']}\nAssistant: {exchange['assistant']}\n\n"
-
+            recent_history = conversation_history[-10:] if len(conversation_history) > 10 else conversation_history
+            for msg in recent_history:
+                if msg.type == "human":
+                    conversation_context += f"User: {msg.content}\n"
+                elif msg.type == "ai":
+                    conversation_context += f"Assistant: {msg.content}\n\n"
         
+       
         if conversation_context:
-            
+            logger.info(f"Conversation context for {current_user.email}: {conversation_context}")
             if current_user.role == "doctor":
                 enhanced_text = f"""Previous conversation context:
              {conversation_context}
@@ -659,7 +669,7 @@ Note: Only use query_stats tool and check_availability tool and don't use any ot
         Current user role: {current_user.role}
         Current message: {text}"""
         else:
-                
+            logger.info(f"Conversation context for {current_user.email}: {conversation_context}")
             if current_user.role == "doctor":
                 enhanced_text = f"""Doctor query for statistics only. 
 You are Dr. {current_user.name} (email: {current_user.email}).
@@ -670,11 +680,14 @@ Example for your appointments: 'appointments_tomorrow, {current_user.name}, DOCT
             else:
                 enhanced_text = f"Patient query . User name: {current_user.name}\nUser email: {current_user.email}\nUser role: {current_user.role}\nMessage: {text}"
 
-       
-        agent_response = agent.invoke({"input": enhanced_text})
+        
+        agent_response = agent.invoke({"input": enhanced_text, "chat_history": conversation_history})
         response = agent_response["output"] if "output" in agent_response else str(agent_response)
         
-       
+        
+        memory.save_context({"input": text}, {"output": response})
+        
+        
         with SessionLocal() as session:
             history = PromptHistory(
                 session_id=prompt.session_id,
@@ -685,8 +698,8 @@ Example for your appointments: 'appointments_tomorrow, {current_user.name}, DOCT
             session.add(history)
             session.commit()
         
-        # Send stats to Slack 
-        if current_user.role == "doctor" :
+        
+        if current_user.role == "doctor":
             try:
                 slack_token = os.getenv("SLACK_TOKEN")
                 if slack_token and slack_token != "missing-slack-token":

@@ -9,8 +9,9 @@ const PatientDashboard = ({ user, onLogout }) => {
   const [loading, setLoading] = useState(false);
   const [appointments, setAppointments] = useState([]);
   const [history, setHistory] = useState([]);
-
-  const sessionId = `patient_${user.email}_${Date.now()}`;
+  
+  // Fix: Use useState to maintain consistent session ID across re-renders
+  const [sessionId] = useState(() => `patient_${user.email}_${Date.now()}`);
 
   useEffect(() => {
     fetchPromptHistory();
