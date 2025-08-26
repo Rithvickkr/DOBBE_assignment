@@ -318,7 +318,6 @@ def query_stats(query_type_and_doctor: str):
             - appointments_today: Get today's appointments for the doctor
             - appointments_tomorrow: Get tomorrow's appointments for the doctor  
             - appointments_yesterday: Get yesterday's appointments for the doctor
-            - YYYY-MM-DD: Get appointments for a specific date
             
     Returns:
         Statistical information about appointments for the specified doctor.
@@ -452,7 +451,7 @@ tools = [check_availability, book_appointment, query_stats]
 agent = initialize_agent(
     tools=tools,
     llm=llm,
-    agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+    agent_type=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
     memory=memory,
     verbose=True,
     handle_parsing_errors=True,
